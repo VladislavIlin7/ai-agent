@@ -4,6 +4,7 @@ from googleapiclient.errors import HttpError
 
 
 def explain_google_http_error(exc: HttpError, api_name: str) -> RuntimeError:
+    """Преобразует ошибку Google API в понятный текст"""
     status = getattr(exc.resp, "status", "unknown")
     raw_content = exc.content.decode("utf-8", errors="replace")
     message = raw_content
@@ -22,10 +23,10 @@ def explain_google_http_error(exc: HttpError, api_name: str) -> RuntimeError:
     hint = ""
     if status == 403 and reason == "accessNotConfigured":
         hint = (
-            f"\nHint: enable {api_name} in the same Google Cloud project that owns "
-            "credentials.json, wait a few minutes, then run the command again."
+            f"\nПодсказка включите {api_name} в том же Google Cloud проекте "
+            "где создан credentials json и повторите запуск через пару минут"
         )
     elif status == 403:
-        hint = "\nHint: check OAuth consent screen test users and requested scopes."
+        hint = "\nПодсказка проверьте test users и scopes в OAuth consent screen"
 
-    return RuntimeError(f"Google {api_name} error {status}: {message}{hint}")
+    return RuntimeError(f"Ошибка Google {api_name} {status} {message}{hint}")

@@ -6,46 +6,49 @@ from tools.event_extractor import EventExtractor
 
 
 def configure_output_encoding() -> None:
+    """Настраивает вывод в UTF 8 для Windows"""
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
 
 
 def parse_args() -> argparse.Namespace:
+    """Читает аргументы командной строки"""
     parser = argparse.ArgumentParser(
-        description="Email-to-Calendar AI Agent CLI",
+        description="CLI агент для переноса событий из Gmail в Google Calendar",
     )
     parser.add_argument(
         "task",
         nargs="?",
         default="Проверь последние письма и добавь найденные события в календарь",
-        help="Natural language task for the agent.",
+        help="Задача для агента на естественном языке",
     )
     parser.add_argument(
         "--demo",
         action="store_true",
-        help="Use sample emails and do not create real Google Calendar events.",
+        help="Использовать тестовые письма и не создавать реальные события",
     )
     parser.add_argument(
         "--yes",
         action="store_true",
-        help="Create calendar events without asking for confirmation.",
+        help="Создавать события без подтверждения",
     )
     parser.add_argument(
         "--max-results",
         type=int,
         default=10,
-        help="Maximum number of recent Gmail messages to read. Capped at 10.",
+        help="Сколько последних писем читать максимум 10",
     )
     parser.add_argument(
         "--test-llm",
         action="store_true",
-        help="Check LLM connection and exit.",
+        help="Проверить подключение к LLM и выйти",
     )
     return parser.parse_args()
 
 
 def main() -> int:
+    """Запускает CLI приложение"""
     configure_output_encoding()
     args = parse_args()
     try:
@@ -61,7 +64,7 @@ def main() -> int:
         agent.run(args.task)
         return 0
     except RuntimeError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        print(f"Ошибка {exc}", file=sys.stderr)
         return 1
 
 

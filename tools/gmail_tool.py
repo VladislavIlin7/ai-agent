@@ -10,6 +10,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from tools.event_extractor import looks_like_event_text
 from tools.google_errors import explain_google_http_error
 
 
@@ -18,21 +19,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
 ]
 
-EVENT_KEYWORDS = (
-    "meeting",
-    "interview",
-    "deadline",
-    "webinar",
-    "event",
-    "call",
-    "\u0441\u043e\u0431\u0435\u0441\u0435\u0434\u043e\u0432\u0430\u043d\u0438\u0435",
-    "\u0434\u0435\u0434\u043b\u0430\u0439\u043d",
-    "\u0432\u0441\u0442\u0440\u0435\u0447\u0430",
-    "\u0441\u043e\u0437\u0432\u043e\u043d",
-)
-
-
 class GmailTool:
+    """Инструмент для чтения писем Gmail"""
+
     def __init__(
         self,
         demo: bool = False,
@@ -40,16 +29,18 @@ class GmailTool:
         token_path: str = "token.json",
         sample_path: str = "examples/sample_emails.json",
     ) -> None:
+        """Сохраняет пути и режим запуска"""
         self.demo = demo
         self.credentials_path = Path(credentials_path)
         self.token_path = Path(token_path)
         self.sample_path = Path(sample_path)
 
     def read_recent_emails(self, max_results: int = 10) -> list[dict[str, Any]]:
+        """Читает последние письма и оставляет кандидаты на событие"""
         max_results = min(max_results, 10)
         if self.demo or not self.credentials_path.exists():
             if not self.demo:
-                print("credentials.json not found. Falling back to demo mode.")
+                print("credentials json не найден включен demo режим")
             return self._read_sample_emails(max_results)
 
         service = build("gmail", "v1", credentials=self._get_credentials())
@@ -81,10 +72,11 @@ class GmailTool:
             if self._looks_like_event(email):
                 emails.append(email)
 
-        print(f"Gmail tool read {len(messages[:max_results])} messages, candidates: {len(emails)}")
+        print(f"Gmail tool прочитал писем {len(messages[:max_results])} кандидатов {len(emails)}")
         return emails
 
     def _get_credentials(self) -> Credentials:
+        """Получает OAuth токен Google"""
         creds = None
         if self.token_path.exists():
             creds = Credentials.from_authorized_user_file(str(self.token_path), SCOPES)
@@ -92,6 +84,7 @@ class GmailTool:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
+                # OAuth запускается только если токена еще нет
                 flow = InstalledAppFlow.from_client_secrets_file(
                     str(self.credentials_path),
                     SCOPES,
@@ -101,17 +94,20 @@ class GmailTool:
         return creds
 
     def _read_sample_emails(self, max_results: int) -> list[dict[str, Any]]:
+        """Читает тестовые письма для demo режима"""
         data = json.loads(self.sample_path.read_text(encoding="utf-8"))
         emails = data[:max_results]
         candidates = [email for email in emails if self._looks_like_event(email)]
-        print(f"Demo Gmail tool loaded {len(emails)} sample emails, candidates: {len(candidates)}")
+        print(f"Demo Gmail tool загрузил писем {len(emails)} кандидатов {len(candidates)}")
         return candidates
 
     def _looks_like_event(self, email: dict[str, Any]) -> bool:
+        """Проверяет письмо по ключевым словам"""
         text = f"{email.get('subject', '')}\n{email.get('snippet', '')}\n{email.get('body', '')}".lower()
-        return any(keyword in text for keyword in EVENT_KEYWORDS)
+        return looks_like_event_text(text)
 
     def _parse_message(self, message: dict[str, Any]) -> dict[str, Any]:
+        """Преобразует Gmail message в простой словарь"""
         payload = message.get("payload", {})
         headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
         body = self._extract_body(payload)
@@ -125,7 +121,7 @@ class GmailTool:
 
         return {
             "id": message.get("id"),
-            "subject": headers.get("subject", "(no subject)"),
+            "subject": headers.get("subject", "без темы"),
             "from": headers.get("from", ""),
             "received_at": received_at,
             "snippet": message.get("snippet", ""),
@@ -133,18 +129,21 @@ class GmailTool:
         }
 
     def _extract_body(self, payload: dict[str, Any]) -> str:
+        """Достает текстовую часть письма"""
         parts = payload.get("parts", [])
         if parts:
             for part in parts:
                 if part.get("mimeType") == "text/plain":
                     return self._decode_body(part)
             for part in parts:
+                # Gmail может хранить тело письма во вложенных частях
                 nested = self._extract_body(part)
                 if nested:
                     return nested
         return self._decode_body(payload)
 
     def _decode_body(self, part: dict[str, Any]) -> str:
+        """Декодирует base64 тело письма"""
         data = part.get("body", {}).get("data")
         if not data:
             return ""

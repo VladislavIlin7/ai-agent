@@ -9,13 +9,15 @@ import requests
 from dotenv import load_dotenv
 
 
+DEFAULT_TIMEZONE = "Europe/Moscow"
+
 REQUIRED_FIELDS = {
     "has_event": False,
     "title": "",
     "date": "",
     "start_time": "",
     "end_time": "",
-    "timezone": "Europe/Amsterdam",
+    "timezone": DEFAULT_TIMEZONE,
     "description": "",
     "location": "",
     "source_email_subject": "",
@@ -28,15 +30,62 @@ EVENT_KEYWORDS = (
     "webinar",
     "event",
     "call",
-    "\u0441\u043e\u0431\u0435\u0441\u0435\u0434\u043e\u0432\u0430\u043d\u0438\u0435",
-    "\u0434\u0435\u0434\u043b\u0430\u0439\u043d",
-    "\u0432\u0441\u0442\u0440\u0435\u0447\u0430",
-    "\u0441\u043e\u0437\u0432\u043e\u043d",
+    "собеседован",
+    "дедлайн",
+    "встреч",
+    "созвон",
 )
+
+RU_HOUR_WORDS = {
+    "час": 1,
+    "один": 1,
+    "одного": 1,
+    "два": 2,
+    "двух": 2,
+    "три": 3,
+    "трех": 3,
+    "четыре": 4,
+    "четырех": 4,
+    "пять": 5,
+    "пяти": 5,
+    "шесть": 6,
+    "шести": 6,
+    "семь": 7,
+    "семи": 7,
+    "восемь": 8,
+    "восьми": 8,
+    "девять": 9,
+    "девяти": 9,
+    "десять": 10,
+    "десяти": 10,
+    "одиннадцать": 11,
+    "одиннадцати": 11,
+    "двенадцать": 12,
+    "двенадцати": 12,
+}
+
+MORNING_WORDS = ("утра", "утром")
+DAY_WORDS = ("дня", "днем", "днём")
+EVENING_WORDS = ("вечера", "вечером")
+NIGHT_WORDS = ("ночи", "ночью")
+
+
+def normalize_text(text: str) -> str:
+    """Нормализует текст для простого поиска"""
+    return text.lower().replace("ё", "е")
+
+
+def looks_like_event_text(text: str) -> bool:
+    """Проверяет текст по ключевым словам"""
+    normalized = normalize_text(text)
+    return any(keyword in normalized for keyword in EVENT_KEYWORDS)
 
 
 class EventExtractor:
+    """Инструмент для извлечения события из письма"""
+
     def __init__(self, use_llm: bool = True) -> None:
+        """Читает настройки LLM из окружения"""
         load_dotenv()
         self.use_llm = use_llm
         self.api_key = os.getenv("API_KEY", "")
@@ -50,28 +99,30 @@ class EventExtractor:
         }
 
     def extract_event(self, email: dict[str, Any]) -> dict[str, Any]:
+        """Извлекает событие через LLM или fallback"""
         if self.use_llm and self.api_key and self.base_url and self.model:
             try:
                 return self._extract_with_llm(email)
             except Exception as exc:
-                print(f"LLM extraction failed, using fallback extractor: {exc}")
+                print(f"LLM не сработала используется fallback {exc}")
         return self._fallback_extract(email)
 
     def test_connection(self) -> bool:
+        """Проверяет подключение к LLM"""
         self._validate_llm_config()
-        print(f"Testing LLM: model={self.model}, base_url={self.base_url}")
+        print(f"Проверка LLM модель {self.model} base url {self.base_url}")
         response = self._post_chat_completion(
             [
                 {
                     "role": "system",
-                    "content": "Return only JSON, no markdown.",
+                    "content": "Return only JSON no markdown",
                 },
                 {
                     "role": "user",
                     "content": (
                         'Return exactly this JSON: {"has_event": false, "title": "", '
                         '"date": "", "start_time": "", "end_time": "", '
-                        '"timezone": "Europe/Amsterdam", "description": "", '
+                        f'"timezone": "{DEFAULT_TIMEZONE}", "description": "", '
                         '"location": "", "source_email_subject": ""}'
                     ),
                 },
@@ -79,10 +130,11 @@ class EventExtractor:
         )
         content = response["choices"][0]["message"]["content"]
         self._parse_json(content)
-        print("LLM connection OK.")
+        print("Подключение к LLM работает")
         return True
 
     def _extract_with_llm(self, email: dict[str, Any]) -> dict[str, Any]:
+        """Отправляет письмо в LLM и нормализует ответ"""
         self._validate_llm_config()
         prompt = self._build_prompt(email)
         response = self._post_chat_completion(
@@ -90,8 +142,8 @@ class EventExtractor:
                 {
                     "role": "system",
                     "content": (
-                        "You extract calendar events from emails. "
-                        "Return only valid JSON, no markdown."
+                        "You extract calendar events from emails "
+                        "Return only valid JSON no markdown"
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -102,6 +154,7 @@ class EventExtractor:
         return self._normalize_event(event, email)
 
     def _post_chat_completion(self, messages: list[dict[str, str]]) -> dict[str, Any]:
+        """Вызывает OpenAI compatible chat completions"""
         session = requests.Session()
         session.trust_env = self.use_system_proxy
         url = f"{self.base_url}/chat/completions"
@@ -125,14 +178,15 @@ class EventExtractor:
         except requests.HTTPError as exc:
             status = exc.response.status_code if exc.response is not None else "unknown"
             body = exc.response.text[:800] if exc.response is not None else ""
-            raise RuntimeError(f"LLM HTTP error {status}: {body}") from exc
+            raise RuntimeError(f"LLM HTTP ошибка {status} {body}") from exc
         except requests.RequestException as exc:
             raise RuntimeError(
-                "Could not connect to LLM. Check BASE_URL, network access, and proxy "
-                "settings. If you need system proxy, set USE_SYSTEM_PROXY=true."
+                "Не удалось подключиться к LLM проверьте BASE_URL сеть и proxy "
+                "если нужен системный proxy поставьте USE_SYSTEM_PROXY true"
             ) from exc
 
     def _validate_llm_config(self) -> None:
+        """Проверяет обязательные настройки LLM"""
         missing = [
             name
             for name, value in {
@@ -143,9 +197,10 @@ class EventExtractor:
             if not value
         ]
         if missing:
-            raise RuntimeError(f"Missing LLM env vars: {', '.join(missing)}")
+            raise RuntimeError(f"Не хватает переменных LLM {', '.join(missing)}")
 
     def _normalize_base_url(self, value: str) -> str:
+        """Приводит BASE_URL к корню v1"""
         url = value.strip().rstrip("/")
         if not url:
             return ""
@@ -158,6 +213,7 @@ class EventExtractor:
         return url
 
     def _build_prompt(self, email: dict[str, Any]) -> str:
+        """Собирает prompt для извлечения JSON"""
         body = email.get("body", "")[:3500]
         return f"""
 Extract one calendar event from this email.
@@ -169,7 +225,7 @@ Return strictly this JSON object:
   "date": "YYYY-MM-DD",
   "start_time": "HH:MM",
   "end_time": "HH:MM",
-  "timezone": "Europe/Amsterdam",
+  "timezone": "{DEFAULT_TIMEZONE}",
   "description": "...",
   "location": "...",
   "source_email_subject": "..."
@@ -182,41 +238,44 @@ Email body:
 """.strip()
 
     def _parse_json(self, content: str) -> dict[str, Any]:
+        """Достает JSON из ответа модели"""
         content = content.strip()
         if content.startswith("```"):
+            # Модель иногда возвращает JSON внутри markdown блока
             content = re.sub(r"^```(?:json)?", "", content).strip()
             content = re.sub(r"```$", "", content).strip()
         match = re.search(r"\{.*\}", content, re.DOTALL)
         if not match:
-            raise ValueError("LLM did not return a JSON object")
+            raise ValueError("LLM не вернула JSON объект")
         return json.loads(match.group(0))
 
     def _normalize_event(self, event: dict[str, Any], email: dict[str, Any]) -> dict[str, Any]:
+        """Добавляет отсутствующие поля события"""
         normalized = REQUIRED_FIELDS | event
         normalized["has_event"] = bool(normalized.get("has_event"))
+        normalized["timezone"] = normalized.get("timezone") or DEFAULT_TIMEZONE
         normalized["source_email_subject"] = (
             normalized.get("source_email_subject") or email.get("subject", "")
         )
         return normalized
 
     def _fallback_extract(self, email: dict[str, Any]) -> dict[str, Any]:
+        """Извлекает событие простыми правилами"""
         text = f"{email.get('subject', '')}\n{email.get('snippet', '')}\n{email.get('body', '')}"
-        lower = text.lower()
-        has_event = any(keyword in lower for keyword in EVENT_KEYWORDS)
-        if not has_event:
+        if not looks_like_event_text(text):
             return self._normalize_event({"has_event": False}, email)
 
         date = self._find_date(text)
         start_time = self._find_time(text)
         title = email.get("subject", "Email event").strip()
-        description = email.get("snippet") or "Extracted from email in fallback mode."
+        description = email.get("snippet") or "Событие найдено fallback режимом"
         event = {
             "has_event": True,
             "title": title,
             "date": date,
             "start_time": start_time,
             "end_time": "",
-            "timezone": "Europe/Amsterdam",
+            "timezone": DEFAULT_TIMEZONE,
             "description": description,
             "location": self._find_location(text),
             "source_email_subject": email.get("subject", ""),
@@ -224,6 +283,14 @@ Email body:
         return self._normalize_event(event, email)
 
     def _find_date(self, text: str) -> str:
+        """Ищет дату в простых форматах"""
+        lower = normalize_text(text)
+        today = datetime.now().date()
+        if "послезавтра" in lower or "после завтра" in lower:
+            return (today + timedelta(days=2)).isoformat()
+        if "завтра" in lower:
+            return (today + timedelta(days=1)).isoformat()
+
         iso_match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", text)
         if iso_match:
             return iso_match.group(1)
@@ -233,16 +300,60 @@ Email body:
             day, month, year = european_match.groups()
             return f"{year}-{int(month):02d}-{int(day):02d}"
 
-        tomorrow = datetime.now().date() + timedelta(days=1)
-        return tomorrow.isoformat()
+        return (today + timedelta(days=1)).isoformat()
 
     def _find_time(self, text: str) -> str:
-        match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", text)
-        if match:
-            return f"{int(match.group(1)):02d}:{match.group(2)}"
+        """Ищет время в цифрах или словами"""
+        lower = normalize_text(text)
+        numeric_match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", lower)
+        if numeric_match:
+            hour = int(numeric_match.group(1))
+            minute = numeric_match.group(2)
+            hour = self._apply_day_part(hour, lower)
+            return f"{hour:02d}:{minute}"
+
+        bare_hour_match = re.search(
+            r"\b(?:в|к|около|примерно|ближе к)?\s*([1-9]|1[0-2])\s*"
+            r"(?:час|часа|часам|часов)?\s*"
+            r"(утра|утром|дня|днем|днём|вечера|вечером|ночи|ночью)\b",
+            lower,
+        )
+        if bare_hour_match:
+            hour = int(bare_hour_match.group(1))
+            hour = self._apply_day_part(hour, lower)
+            return f"{hour:02d}:00"
+
+        for word, hour in RU_HOUR_WORDS.items():
+            if re.search(rf"\b(?:к|около|примерно|ближе к)?\s*{word}\s*(?:час|часа|часам|часов)?\b", lower):
+                hour = self._apply_day_part(hour, lower)
+                return f"{hour:02d}:00"
         return ""
 
+    def _apply_day_part(self, hour: int, lower_text: str) -> int:
+        """Уточняет час по словам утро день вечер ночь"""
+        if any(word in lower_text for word in MORNING_WORDS):
+            if hour == 12:
+                return 0
+            return hour
+        if any(word in lower_text for word in DAY_WORDS):
+            if 1 <= hour <= 6:
+                return hour + 12
+            return hour
+        if any(word in lower_text for word in EVENING_WORDS):
+            if 1 <= hour <= 11:
+                return hour + 12
+            return hour
+        if any(word in lower_text for word in NIGHT_WORDS):
+            if hour == 12:
+                return 0
+            return hour
+        if hour <= 11 and "ближе к" in lower_text:
+            # Без уточнения ближе к восьми чаще означает вечер
+            return hour + 12
+        return hour
+
     def _find_location(self, text: str) -> str:
+        """Ищет ссылку как место события"""
         url_match = re.search(r"https?://\S+", text)
         if url_match:
             return url_match.group(0).rstrip(".,)")
