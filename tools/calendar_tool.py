@@ -9,7 +9,6 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from tools.event_extractor import DEFAULT_TIMEZONE
 from tools.gmail_tool import SCOPES
 from tools.google_errors import explain_google_http_error
 
@@ -61,7 +60,7 @@ class CalendarTool:
         """Преобразует JSON события в формат Google Calendar"""
         title = event.get("title") or "Email event"
         date = event.get("date")
-        timezone = event.get("timezone") or DEFAULT_TIMEZONE
+        timezone = event.get("timezone") or "Europe/Moscow"
         start_time = event.get("start_time") or ""
         end_time = event.get("end_time") or ""
         description = self._build_description(event)
@@ -106,6 +105,7 @@ class CalendarTool:
             event.get("description", ""),
             "",
             f"Тема исходного письма {event.get('source_email_subject', '')}",
+            f"Отправитель {event.get('source_email_from', '')}",
         ]
         return "\n".join(line for line in lines if line is not None).strip()
 

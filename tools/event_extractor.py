@@ -9,18 +9,17 @@ import requests
 from dotenv import load_dotenv
 
 
-DEFAULT_TIMEZONE = "Europe/Moscow"
-
 REQUIRED_FIELDS = {
     "has_event": False,
     "title": "",
     "date": "",
     "start_time": "",
     "end_time": "",
-    "timezone": DEFAULT_TIMEZONE,
+    "timezone": "Europe/Moscow",
     "description": "",
     "location": "",
     "source_email_subject": "",
+    "source_email_from": "",
 }
 
 EVENT_KEYWORDS = (
@@ -123,7 +122,8 @@ class EventExtractor:
                         'Return exactly this JSON: {"has_event": false, "title": "", '
                         '"date": "", "start_time": "", "end_time": "", '
                         f'"timezone": "{DEFAULT_TIMEZONE}", "description": "", '
-                        '"location": "", "source_email_subject": ""}'
+                        '"location": "", "source_email_subject": "", '
+                        '"source_email_from": ""}'
                     ),
                 },
             ],
@@ -215,10 +215,36 @@ class EventExtractor:
     def _build_prompt(self, email: dict[str, Any]) -> str:
         """Собирает prompt для извлечения JSON"""
         body = email.get("body", "")[:3500]
+        today = datetime.now().date().isoformat()
+        tomorrow = (datetime.now().date() + timedelta(days=1)).isoformat()
+        day_after_tomorrow = (datetime.now().date() + timedelta(days=2)).isoformat()
         return f"""
-Extract one calendar event from this email.
-If there is no event, set has_event to false and leave other fields empty.
-Return strictly this JSON object:
+You extract calendar events from emails.
+Current date is {today}.
+Default timezone is {DEFAULT_TIMEZONE}.
+
+Return has_event true when the email contains any future meeting call interview deadline webinar event appointment or personal reminder.
+Russian informal phrases are valid events.
+Examples that must be events:
+- "послезавтра ближе к восьми надо сходить на встречу" means date {day_after_tomorrow} and start_time 20:00
+- "завтра в восемь утра собеседование" means date {tomorrow} and start_time 08:00
+- "завтра в 8 вечера созвон" means date {tomorrow} and start_time 20:00
+- "дедлайн в пятницу" is a deadline event
+
+Relative date rules:
+- "сегодня" means {today}
+- "завтра" means {tomorrow}
+- "послезавтра" and "после завтра" mean {day_after_tomorrow}
+
+Time rules:
+- If text says утра use morning time
+- If text says дня use afternoon time
+- If text says вечера use evening time
+- If text says ночи use night time
+- If text says "ближе к восьми" without уточнение prefer 20:00
+
+If there is no future action with date or time set has_event false and leave other fields empty.
+Return strictly this JSON object and no markdown:
 {{
   "has_event": true/false,
   "title": "...",
@@ -228,10 +254,12 @@ Return strictly this JSON object:
   "timezone": "{DEFAULT_TIMEZONE}",
   "description": "...",
   "location": "...",
-  "source_email_subject": "..."
+  "source_email_subject": "...",
+  "source_email_from": "..."
 }}
 
 Email subject: {email.get("subject", "")}
+Email from: {email.get("from", "")}
 Email snippet: {email.get("snippet", "")}
 Email body:
 {body}
@@ -257,6 +285,9 @@ Email body:
         normalized["source_email_subject"] = (
             normalized.get("source_email_subject") or email.get("subject", "")
         )
+        normalized["source_email_from"] = (
+            normalized.get("source_email_from") or email.get("from", "")
+        )
         return normalized
 
     def _fallback_extract(self, email: dict[str, Any]) -> dict[str, Any]:
@@ -279,6 +310,7 @@ Email body:
             "description": description,
             "location": self._find_location(text),
             "source_email_subject": email.get("subject", ""),
+            "source_email_from": email.get("from", ""),
         }
         return self._normalize_event(event, email)
 
